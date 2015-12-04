@@ -1,0 +1,3 @@
+name = Drupal MAF Copy / Backup script
+description = Provides a user interface for the backup and copy script
+core = 7.x

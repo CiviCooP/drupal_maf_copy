@@ -1,0 +1,420 @@
+<?php
+
+function drupal_maf_copy_permission() {
+  return array(
+    'create backups' => array(
+      'title' => t('Create backups from the UI'),
+    ),
+    'copy to test' => array(
+      'title' => t('Copy site to test from the UI'),
+    ),
+  );
+}
+
+function drupal_maf_copy_menu() {
+  $items = array();
+  $items['admin/config/maf'] = array(
+    'title'            => 'MAF',
+    'description'      => 'MAF Settings',
+    'weight'           => -20,
+    'page callback'    => 'drupal_maf_copy_admin_block',
+    'access arguments' => array('access administration pages'),
+  );
+  $items['admin/config/maf/backup'] = array(
+    'title'            => 'Backup',
+    'description'      => 'Run backup.',
+    'type'             => MENU_NORMAL_ITEM,
+    'page callback'    => 'drupal_get_form',
+    'page arguments'   => array('drupal_maf_copy_backup_form'),
+    'access arguments' => array('create backups'),
+  );
+  $items['admin/config/maf/backup/start'] = array(
+    'page callback' => 'drupal_maf_copy_backup_page',
+    'access callback' =>  'user_access',
+    'access arguments' => array('create backups'),
+  );
+  $items['admin/config/maf/backup/run'] = array(
+    'page callback' => 'drupal_maf_copy_backup_run',
+    'access callback' =>  'user_access',
+    'access arguments' => array('create backups'),
+    'type' => MENU_CALLBACK,
+    'delivery callback' => 'drupal_maf_copy_ajax_callback',  // Magic goes here
+  );
+  $items['admin/config/maf/copy_to_test'] = array(
+    'title'            => 'Copy to test',
+    'description'      => 'Copy this site to the test environment.',
+    'type'             => MENU_NORMAL_ITEM,
+    'page callback'    => 'drupal_get_form',
+    'page arguments'   => array('drupal_maf_copy_to_test_form'),
+    'access arguments' => array('copy to test'),
+  );
+  $items['admin/config/maf/copy_to_test/start'] = array(
+    'page callback' => 'drupal_maf_copy_to_test_page',
+    'access callback' =>  'user_access',
+    'access arguments' => array('copy to test'),
+  );
+  $items['admin/config/maf/copy_to_test/run'] = array(
+    'page callback' => 'drupal_maf_copy_to_test_run',
+    'access callback' =>  'user_access',
+    'access arguments' => array('copy to test'),
+    'type' => MENU_CALLBACK,
+    'delivery callback' => 'drupal_maf_copy_ajax_callback',  // Magic goes here
+  );
+  return $items;
+}
+
+function drupal_maf_copy_backup_form() {
+
+  $form = [];
+
+  $form['backup_description'] = [
+    '#markup' => '<h3>Backup configuration</h3><p>Configuration settings for the backup script.</p>',
+  ];
+
+  $form['maf_copy_location'] = [
+    '#type' => 'textfield',
+    '#title' => 'Path to maf-copy script',
+    '#default_value' => variable_get('maf_copy_location', '/home/maf/maf-copy'),
+    '#description' => 'Where on the server is the maf-copy script located',
+    '#required' => TRUE,
+  ];
+
+  $form['actions']['backup'] = [
+    '#type' => 'submit',
+    '#value' => t('Start backup'),
+    '#submit' => array(
+      'system_settings_form_submit',
+      'drupal_maf_copy_backup_form_submit'
+    )
+  ];
+
+  return system_settings_form($form);
+}
+
+function drupal_maf_copy_backup_form_submit($form, &$form_state) {
+  $form_state['redirect'] = array('admin/config/maf/backup/start', array());
+}
+
+function drupal_maf_copy_to_test_form() {
+
+  $form = [];
+
+  $form['backup_description'] = [
+    '#markup' => '<h3>Copy to test configuration</h3><p>Configuration settings for the copy-to-test script.</p>',
+  ];
+
+  $form['maf_copy_location'] = [
+    '#type' => 'textfield',
+    '#title' => 'Path to maf-copy script',
+    '#default_value' => variable_get('maf_copy_location', '/home/maf/maf-copy'),
+    '#description' => 'Where on the server is the maf-copy script located',
+    '#required' => TRUE,
+  ];
+
+  $form['actions']['copy-to-test'] = [
+    '#type' => 'submit',
+    '#value' => t('Copy to test'),
+    '#submit' => array(
+      'system_settings_form_submit',
+      'drupal_maf_copy_to_test_form_submit'
+    )
+  ];
+
+  return system_settings_form($form);
+}
+
+function drupal_maf_copy_to_test_form_submit($form, &$form_state) {
+  $form_state['redirect'] = array('admin/config/maf/copy_to_test/start', array());
+}
+
+
+function drupal_maf_copy_ajax_callback($page_callback_result) {
+  $page_callback_result['output'] = nl2br(drupal_maf_copy_ansi2html($page_callback_result['output']));
+  echo json_encode($page_callback_result);
+  exit();
+}
+
+function drupal_maf_copy_backup_page() {
+
+  $tmp = variable_get('file_temporary_path');
+  $maf_copy_dir = variable_get('maf_copy_location');
+  if (!is_dir($maf_copy_dir)) {
+    drupal_set_message(t('Invalid path for %1', array('%1' => $maf_copy_dir)), 'error');
+    drupal_goto('/admin/config/maf/backup');
+  }
+  if (!is_dir($tmp)) {
+    drupal_set_message(t('Invalid path for temporary files'), 'error');
+    drupal_goto('/admin/config/maf/backup');
+  }
+  $backupscript = $maf_copy_dir.'/maf_backup.sh';
+  if (!file_exists($backupscript)) {
+    drupal_set_message(t('Backup script not found at %1', array('%1' => $backupscript)), 'error');
+    drupal_goto('/admin/config/maf/backup');
+  }
+
+  $jsfile = drupal_get_path('module','drupal_maf_copy').'/drupal_maf_backup.js';
+  drupal_add_js($jsfile, array('scope' => 'footer'));
+
+  $output = '<pre id="backup_output" style="display: none; background-color: black; color: white; overflow: auto; padding: 10px 15px; font-family: monospace; font-size:12px; min-height: 100px;"></pre>';
+
+  return array(
+    '#markup' => $output,
+  );
+}
+
+function drupal_maf_copy_backup_run() {
+  $only_check = !empty($_GET['only_check']) ? true : false;
+
+  $tmp = variable_get('file_temporary_path');
+  $maf_copy_dir = variable_get('maf_copy_location');
+  if (!is_dir($maf_copy_dir)) {
+    drupal_set_message(t('Invalid path for %1', array('%1' => $maf_copy_dir)), 'error');
+    drupal_goto('/admin/config/maf/backup');
+  }
+  if (!is_dir($tmp)) {
+    drupal_set_message(t('Invalid path for temporary files'), 'error');
+    drupal_goto('/admin/config/maf/backup');
+  }
+
+  $pid_file = $tmp.'/backup.pid';
+  $output_file = $tmp.'/backup.output';
+  $backupscript = $maf_copy_dir.'/maf_backup.sh';
+  if (!file_exists($backupscript)) {
+    drupal_set_message(t('Backup script not found at %1', array('%1' => $backupscript)), 'error');
+    drupal_goto('/admin/config/maf/backup');
+  }
+
+  $script = "(
+    cd {$maf_copy_dir};
+    touch {$pid_file};
+    touch {$output_file};
+    chmod 777 {$output_file};
+    {$backupscript};
+    rm {$pid_file};
+  ) > {$output_file} 2>&1 &";
+
+
+
+  if (!file_exists($pid_file) && !$only_check) {
+    chdir($maf_copy_dir);
+    shell_exec($script);
+
+    return array(
+      'output' => file_get_contents($output_file),
+      'running' => true,
+    );
+  } else {
+    return array(
+      'output' => file_get_contents($output_file),
+      'running' => file_exists($pid_file) ? TRUE : FALSE,
+    );
+  }
+}
+
+function drupal_maf_copy_to_test_page() {
+
+  $tmp = variable_get('file_temporary_path');
+  $maf_copy_dir = variable_get('maf_copy_location');
+  if (!is_dir($maf_copy_dir)) {
+    drupal_set_message(t('Invalid path for %1', array('%1' => $maf_copy_dir)), 'error');
+    drupal_goto('/admin/config/maf/copy_to_test');
+  }
+  if (!is_dir($tmp)) {
+    drupal_set_message(t('Invalid path for temporary files'), 'error');
+    drupal_goto('/admin/config/maf/copy_to_test');
+  }
+  $backupscript = $maf_copy_dir.'/maf_copy.sh';
+  if (!file_exists($backupscript)) {
+    drupal_set_message(t('Backup script not found at %1', array('%1' => $backupscript)), 'error');
+    drupal_goto('/admin/config/maf/copy_to_test');
+  }
+
+  $jsfile = drupal_get_path('module','drupal_maf_copy').'/drupal_maf_copy.js';
+  drupal_add_js($jsfile, array('scope' => 'footer'));
+
+  $output = '<pre id="backup_output" style="display: none; background-color: black; color: white; overflow: auto; padding: 10px 15px; font-family: monospace; font-size:12px; min-height: 100px;"></pre>';
+
+  return array(
+    '#markup' => $output,
+  );
+}
+
+function drupal_maf_copy_to_test_run() {
+  $only_check = !empty($_GET['only_check']) ? true : false;
+
+  $tmp = variable_get('file_temporary_path');
+  $maf_copy_dir = variable_get('maf_copy_location');
+  if (!is_dir($maf_copy_dir)) {
+    drupal_set_message(t('Invalid path for %1', array('%1' => $maf_copy_dir)), 'error');
+    drupal_goto('/admin/config/maf/copy_to_test');
+  }
+  if (!is_dir($tmp)) {
+    drupal_set_message(t('Invalid path for temporary files'), 'error');
+    drupal_goto('/admin/config/maf/copy_to_test');
+  }
+
+  $pid_file = $tmp.'/backup.pid';
+  $output_file = $tmp.'/backup.output';
+  $backupscript = $maf_copy_dir.'/maf_copy.sh';
+  if (!file_exists($backupscript)) {
+    drupal_set_message(t('Backup script not found at %1', array('%1' => $backupscript)), 'error');
+    drupal_goto('/admin/config/maf/copy_to_test');
+  }
+
+  $script = "(
+    cd {$maf_copy_dir};
+    touch {$pid_file};
+    touch {$output_file};
+    chmod 777 {$output_file};
+    {$backupscript};
+    rm {$pid_file};
+  ) > {$output_file} 2>&1 &";
+
+
+
+  if (!file_exists($pid_file) && !$only_check) {
+    chdir($maf_copy_dir);
+    shell_exec($script);
+
+    return array(
+      'output' => file_get_contents($output_file),
+      'running' => true,
+    );
+  } else {
+    return array(
+      'output' => file_get_contents($output_file),
+      'running' => file_exists($pid_file) ? TRUE : FALSE,
+    );
+  }
+}
+
+
+
+function drupal_maf_copy_ansi2html($text)
+{
+  // remove cursor movement sequences
+  $text = preg_replace('#\e\[(K|s|u|2J|2K|\d+(A|B|C|D|E|F|G|J|K|S|T)|\d+;\d+(H|f))#', '', $text);
+  $text = htmlspecialchars($text, PHP_VERSION_ID >= 50400 ? ENT_QUOTES | ENT_SUBSTITUTE : ENT_QUOTES, 'UTF-8');
+  // carriage return
+  $text = preg_replace('#^.*\r(?!\n)#m', '', $text);
+  $tokens = _drupal_maf_copy_tokenize($text);
+  // a backspace remove the previous character but only from a text token
+  foreach ($tokens as $i => $token) {
+    if ('backspace' == $token[0]) {
+      $j = $i;
+      while (--$j >= 0) {
+        if ('text' == $tokens[$j][0] && strlen($tokens[$j][1]) > 0) {
+          $tokens[$j][1] = substr($tokens[$j][1], 0, -1);
+          break;
+        }
+      }
+    }
+  }
+  $html = '';
+  foreach ($tokens as $token) {
+    if ('text' == $token[0]) {
+      $html .= $token[1];
+    } elseif ('color' == $token[0]) {
+      $html .= _drupal_maf_copy_convertAnsiToColor($token[1]);
+    }
+  }
+  if (true) {
+    $html = sprintf('<span style="background-color: %s; color: %s">%s</span>', _drupal_maf_copy_getInlineColors('black'), _drupal_maf_copy_getInlineColors('white'), $html);
+  } else {
+    $html = sprintf('<span class="ansi_color_bg_black ansi_color_fg_white">%s</span>', $html);
+  }
+  // remove empty span
+  $html = preg_replace('#<span[^>]*></span>#', '', $html);
+  return $html;
+}
+
+function _drupal_maf_copy_getInlineColors($color) {
+
+  $colors = array(
+    'black' => 'black',
+    'red' => 'darkred',
+    'green' => 'green',
+    'yellow' => 'yellow',
+    'blue' => 'blue',
+    'magenta' => 'darkmagenta',
+    'cyan' => 'cyan',
+    'white' => 'white',
+    'brblack' => 'black',
+    'brred' => 'red',
+    'brgreen' => 'lightgreen',
+    'bryellow' => 'lightyellow',
+    'brblue' => 'lightblue',
+    'brmagenta' => 'magenta',
+    'brcyan' => 'lightcyan',
+    'brwhite' => 'white',
+  );
+  return $colors[$color];
+
+}
+
+function _drupal_maf_copy_colorNames($color) {
+  $colors = array(
+    'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+    '', '',
+    'brblack', 'brred', 'brgreen', 'bryellow', 'brblue', 'brmagenta', 'brcyan', 'brwhite',
+  );
+  return $colors[$color];
+}
+
+function _drupal_maf_copy_convertAnsiToColor($ansi)
+{
+  $bg = 0;
+  $fg = 7;
+  $as = '';
+  if ('0' != $ansi && '' != $ansi) {
+    $options = explode(';', $ansi);
+    foreach ($options as $option) {
+      if ($option >= 30 && $option < 38) {
+        $fg = $option - 30;
+      } elseif ($option >= 40 && $option < 48) {
+        $bg = $option - 40;
+      } elseif (39 == $option) {
+        $fg = 7;
+      } elseif (49 == $option) {
+        $bg = 0;
+      }
+    }
+    // options: bold => 1, underscore => 4, blink => 5, reverse => 7, conceal => 8
+    if (in_array(1, $options)) {
+      $fg += 10;
+      $bg += 10;
+    }
+    if (in_array(4, $options)) {
+      $as = '; text-decoration: underline';
+    }
+    if (in_array(7, $options)) {
+      $tmp = $fg;
+      $fg = $bg;
+      $bg = $tmp;
+    }
+  }
+  if (true) {
+    return sprintf('</span><span style="background-color: %s; color: %s%s">', _drupal_maf_copy_getInlineColors(_drupal_maf_copy_colorNames($bg)), _drupal_maf_copy_getInlineColors(_drupal_maf_copy_colorNames($fg)), $as);
+  } else {
+    return sprintf('</span><span class="ansi_color_bg_%s ansi_color_fg_%s">', _drupal_maf_copy_colorNames($bg), _drupal_maf_copy_colorNames($fg));
+  }
+}
+
+function _drupal_maf_copy_tokenize($text)
+{
+  $tokens = array();
+  preg_match_all("/(?:\e\[(.*?)m|(\x08))/", $text, $matches, PREG_OFFSET_CAPTURE);
+  $offset = 0;
+  foreach ($matches[0] as $i => $match) {
+    if ($match[1] - $offset > 0) {
+      $tokens[] = array('text', substr($text, $offset, $match[1] - $offset));
+    }
+    $tokens[] = array("\x08" == $match[0] ? 'backspace' : 'color', $matches[1][$i][0]);
+    $offset = $match[1] + strlen($match[0]);
+  }
+  if ($offset < strlen($text)) {
+    $tokens[] = array('text', substr($text, $offset));
+  }
+  return $tokens;
+}
+
