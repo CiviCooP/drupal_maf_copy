@@ -17,7 +17,7 @@ function drupal_maf_copy_menu() {
     'title'            => 'MAF',
     'description'      => 'MAF Settings',
     'weight'           => -20,
-    'page callback'    => 'drupal_maf_copy_admin_block',
+    'page callback' => 'system_admin_menu_block_page',
     'access arguments' => array('access administration pages'),
   );
   $items['admin/config/maf/backup'] = array(
